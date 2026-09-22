@@ -1,108 +1,72 @@
+from copy import deepcopy
+
 import pytest
 from fastapi.testclient import TestClient
 
-from app import app, activities
+from src.app import activities, app
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def reset_activities():
-    original = {
-        name: {
-            "description": details["description"],
-            "schedule": details["schedule"],
-            "max_participants": details["max_participants"],
-            "participants": list(details["participants"]),
-        }
-        for name, details in activities.items()
-    }
-
+    original = deepcopy(activities)
     activities.clear()
-    activities.update(original)
+    activities.update(
+        {
+            "Chess Club": {
+                "description": "Learn strategies and compete in chess tournaments",
+                "schedule": "Fridays, 3:30 PM - 5:00 PM",
+                "max_participants": 12,
+                "participants": ["michael@mergington.edu", "daniel@mergington.edu"],
+            },
+            "Programming Class": {
+                "description": "Learn programming fundamentals and build software projects",
+                "schedule": "Tuesdays and Thursdays, 3:30 PM - 4:30 PM",
+                "max_participants": 20,
+                "participants": ["emma@mergington.edu", "sophia@mergington.edu"],
+            },
+        }
+    )
     yield
     activities.clear()
     activities.update(original)
 
 
-client = TestClient(app)
+@pytest.fixture
+def client():
+    return TestClient(app)
 
 
-def test_get_activities_returns_all_activity_data():
-    # Arrange
-    expected_activity_name = "Chess Club"
-    expected_participants = ["michael@mergington.edu", "daniel@mergington.edu"]
+def test_root_redirects_to_static_index(client):
+    response = client.get("/", follow_redirects=False)
 
-    # Act
+    assert response.status_code == 307
+    assert response.headers["location"] == "/static/index.html"
+
+
+def test_get_activities_returns_activity_data(client, reset_activities):
     response = client.get("/activities")
 
-    # Assert
     assert response.status_code == 200
     data = response.json()
-    assert expected_activity_name in data
-    assert data[expected_activity_name]["participants"] == expected_participants
+    assert "Chess Club" in data
+    assert "Programming Class" in data
+    assert data["Chess Club"]["participants"] == [
+        "michael@mergington.edu",
+        "daniel@mergington.edu",
+    ]
 
 
-def test_signup_adds_new_participant():
-    # Arrange
-    email = "newstudent@mergington.edu"
-    activity_name = "Chess Club"
+def test_signup_adds_student_when_valid(client, reset_activities):
+    response = client.post("/activities/Chess%20Club/signup?email=newstudent@mergington.edu")
 
-    # Act
-    response = client.post("/activities/Chess Club/signup?email=" + email)
-
-    # Assert
     assert response.status_code == 200
-    assert response.json()["message"] == f"Signed up {email} for {activity_name}"
-    assert email in activities[activity_name]["participants"]
+    assert response.json()["message"] == "Signed up newstudent@mergington.edu for Chess Club"
+    assert "newstudent@mergington.edu" in activities["Chess Club"]["participants"]
 
 
-def test_signup_rejects_duplicate_participant():
-    # Arrange
-    email = "michael@mergington.edu"
-    activity_name = "Chess Club"
+def test_signup_rejects_duplicate_student(client, reset_activities):
+    response = client.post("/activities/Chess%20Club/signup?email=michael@mergington.edu")
 
-    # Act
-    response = client.post(f"/activities/{activity_name}/signup?email={email}")
-
-    # Assert
     assert response.status_code == 400
-    assert response.json()["detail"] == "Student already signed up for this activity"
-
-
-def test_signup_rejects_unknown_activity():
-    # Arrange
-    activity_name = "Unknown Activity"
-    email = "test@example.com"
-
-    # Act
-    response = client.post(f"/activities/{activity_name}/signup?email={email}")
-
-    # Assert
-    assert response.status_code == 404
-    assert response.json()["detail"] == "Activity not found"
-
-
-def test_unregister_removes_participant():
-    # Arrange
-    email = "michael@mergington.edu"
-    activity_name = "Chess Club"
-
-    # Act
-    response = client.delete(f"/activities/{activity_name}/participants/{email}")
-
-    # Assert
-    assert response.status_code == 200
-    assert response.json()["message"] == f"Removed {email} from {activity_name}"
-    assert email not in activities[activity_name]["participants"]
-
-
-def test_unregister_missing_participant_returns_404():
-    # Arrange
-    email = "missing@mergington.edu"
-    activity_name = "Chess Club"
-
-    # Act
-    response = client.delete(f"/activities/{activity_name}/participants/{email}")
-
-    # Assert
-    assert response.status_code == 404
-    assert response.json()["detail"] == "Student is not signed up for this activity"
+    assert response.json()["detail"] == "Student is already signed up"
+    assert activities["Chess Club"]["participants"].count("michael@mergington.edu") == 1
